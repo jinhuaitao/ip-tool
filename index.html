@@ -498,7 +498,7 @@
         }
     }
 
-    // --- 增强版：详细错误捕获 + 双 API 备用容灾 ---
+    // --- 接入 IPLark 的 IP 质量检测 ---
     async function checkIpQuality(ip) {
         const proxyEl = document.getElementById('q-proxy');
         const torEl = document.getElementById('q-tor');
@@ -509,78 +509,63 @@
             el.className = 'quality-item';
             const statusNode = el.querySelector('.q-status');
             statusNode.textContent = '请求中...';
-            statusNode.style.color = ''; // 清除之前的错误颜色
+            statusNode.style.color = '';
             statusNode.style.fontSize = ''; 
         });
 
-        console.log(`[IP 质量检测] 开始分析 IP: ${ip}`);
+        console.log(`[IP 质量检测] 开始使用 IPLark 分析 IP: ${ip}`);
 
         try {
-            // 前置拦截：过滤无效或局域网 IP
             if (!ip || ip.includes('127.0.0.1') || ip.startsWith('192.168.') || ip.startsWith('10.')) {
                 throw new Error("局域网 IP 无安全数据");
             }
 
-            let securityData = null;
+            // 【注意 1】替换为你抓包得到的 IPLark 真实接口地址
+            const apiUrl = `https://api.iplark.com/v1/risk/${ip}`; 
+            
+            const response = await fetch(apiUrl, { 
+                // 如果抓包发现它需要特殊的 Header (比如 Authorization 验证头)，在这里添加
+                headers: {
+                    'Accept': 'application/json'
+                },
+                signal: AbortSignal.timeout(5000) 
+            });
 
-            // --- 策略 1: 尝试 ipwho.is ---
-            try {
-                const response = await fetch(`https://ipwho.is/${ip}`, { signal: AbortSignal.timeout(5000) });
-                const data = await response.json();
-                if (data.success && data.security) {
-                    securityData = {
-                        isProxyOrVPN: data.security.proxy || data.security.vpn,
-                        isTor: data.security.tor,
-                        isHosting: data.security.hosting
-                    };
-                    console.log("[IP 质量检测] 使用 ipwho.is 获取成功", data.security);
-                } else {
-                    throw new Error(data.message || "ipwho.is 未返回 security 字段");
-                }
-            } catch (err1) {
-                console.warn(`[IP 质量检测] ipwho.is 请求失败 (${err1.message})，尝试备用 API...`);
-                
-                // --- 策略 2: 备用回退 api.ipapi.is ---
-                const fallbackRes = await fetch(`https://api.ipapi.is/?q=${ip}`, { signal: AbortSignal.timeout(5000) });
-                if (!fallbackRes.ok) throw new Error(`双 API 均失效 (HTTP ${fallbackRes.status})`);
-                
-                const fallbackData = await fallbackRes.json();
-                if (fallbackData.ip) {
-                    securityData = {
-                        isProxyOrVPN: fallbackData.is_proxy || fallbackData.is_vpn,
-                        isTor: fallbackData.is_tor,
-                        isHosting: fallbackData.is_datacenter
-                    };
-                    console.log("[IP 质量检测] 使用备用 api.ipapi.is 获取成功", fallbackData);
-                } else {
-                    throw new Error("备用 API 未返回有效数据");
-                }
+            if (!response.ok) {
+                throw new Error(`IPLark 请求失败 (HTTP ${response.status})`);
             }
 
-            // --- 渲染成功数据 ---
-            setQualityStatus(proxyEl, securityData.isProxyOrVPN, "检测出代理", "未检测出");
-            setQualityStatus(torEl, securityData.isTor, "Tor 节点", "未检测出");
-            setQualityStatus(hostingEl, securityData.isHosting, "是 (机房 IP)", "否 (家庭/基站)");
+            const resJson = await response.json();
+            
+            // 【注意 2】根据 IPLark 实际返回的 JSON 嵌套结构进行修改
+            // 这里假设真实数据包在 resJson.data 里面
+            const riskData = resJson.data; 
+
+            if (!riskData) {
+                throw new Error("IPLark 返回数据格式不匹配或为空");
+            }
+
+            // 【注意 3】替换为 IPLark 真实使用的字段名 (如 riskData.isProxy)
+            setQualityStatus(proxyEl, riskData.is_proxy || riskData.is_vpn, "检测出代理", "未检测出");
+            setQualityStatus(torEl, riskData.is_tor, "Tor 节点", "未检测出");
+            setQualityStatus(hostingEl, riskData.is_datacenter || riskData.is_hosting, "是 (机房 IP)", "否 (家庭/基站)");
 
         } catch (err) {
-            console.error("[IP 质量检测] 最终失败原因:", err);
+            console.error("[IP 质量检测] IPLark 失败原因:", err);
             
-            // 细化错误提示并显示在 UI 上
             let uiErrorMsg = "检测异常";
             if (err.name === 'AbortError' || err.message.includes('timeout')) {
                 uiErrorMsg = "请求超时";
             } else if (err.message.includes('Failed to fetch')) {
-                uiErrorMsg = "被浏览器/插件拦截";
-            } else if (err.message.includes('局域网')) {
-                uiErrorMsg = "本地 IP 忽略";
+                uiErrorMsg = "被跨域(CORS)拦截";
             } else {
-                uiErrorMsg = "API 限流或失效";
+                uiErrorMsg = "解析失败";
             }
 
             [proxyEl, torEl, hostingEl].forEach(el => {
                 const statusSpan = el.querySelector('.q-status');
                 statusSpan.textContent = uiErrorMsg;
-                statusSpan.style.color = '#d97706'; // 橘黄色警告
+                statusSpan.style.color = '#d97706'; 
                 statusSpan.style.fontSize = '0.9rem';
             });
         }
