@@ -540,19 +540,21 @@
             } catch (err1) {
                 console.warn(`[IP 质量检测] ipwho.is 请求失败 (${err1.message})，尝试备用 API...`);
                 
-                // --- 直接使用 api.ipapi.is ---
-            const fallbackRes = await fetch(`https://api.ipapi.is/?q=${ip}`, { signal: AbortSignal.timeout(5000) });
-            if (!fallbackRes.ok) throw new Error(`API 拒绝访问 (HTTP ${fallbackRes.status})`);
-            
-            const fallbackData = await fallbackRes.json();
-            if (fallbackData.ip) {
-                securityData = {
-                    isProxyOrVPN: fallbackData.is_proxy || fallbackData.is_vpn,
-                    isTor: fallbackData.is_tor,
-                    isHosting: fallbackData.is_datacenter
-                };
-            } else {
-                throw new Error("API 未返回有效数据");
+                // --- 策略 2: 备用回退 api.ipapi.is ---
+                const fallbackRes = await fetch(`https://api.ipapi.is/?q=${ip}`, { signal: AbortSignal.timeout(5000) });
+                if (!fallbackRes.ok) throw new Error(`双 API 均失效 (HTTP ${fallbackRes.status})`);
+                
+                const fallbackData = await fallbackRes.json();
+                if (fallbackData.ip) {
+                    securityData = {
+                        isProxyOrVPN: fallbackData.is_proxy || fallbackData.is_vpn,
+                        isTor: fallbackData.is_tor,
+                        isHosting: fallbackData.is_datacenter
+                    };
+                    console.log("[IP 质量检测] 使用备用 api.ipapi.is 获取成功", fallbackData);
+                } else {
+                    throw new Error("备用 API 未返回有效数据");
+                }
             }
 
             // --- 渲染成功数据 ---
